@@ -185,3 +185,38 @@ export const FEATURED = ['ktm-duke-250', 'bajaj-dominar-250', 'skua-250-adv', 'h
 
 export const fmt = (n) => '$' + Math.round(n).toLocaleString('es-AR');
 export const findMoto = (id) => MOTOS.find((m) => m.id === id);
+
+// ------------------------------------------------------------
+//  Accesorios (configurador). Precios de referencia, editables.
+//  "show3d" indica qué pieza se ve en el visor 3D.
+// ------------------------------------------------------------
+export const ACCESSORIES = [
+  { id: 'baul', name: 'Baúl trasero 32 L', price: 120000, show3d: 'baul' },
+  { id: 'cubre', name: 'Cubrepuños', price: 45000, show3d: 'cubre' },
+  { id: 'defensas', name: 'Defensas de motor', price: 85000, show3d: 'defensas' },
+  { id: 'casco', name: 'Casco integral', price: 95000 },
+];
+
+// ------------------------------------------------------------
+//  Precios desde Google Sheets (opcional)
+//  1. Copiá la plantilla "precios-plantilla.csv" a una planilla de Google.
+//  2. Archivo → Compartir → Publicar en la Web → la hoja → formato CSV.
+//  3. Pegá acá el enlace que te da Google. Vacío = usa los precios de este archivo.
+//  Columnas: id, precio, stock   (stock 0 = se muestra como "Vendida")
+// ------------------------------------------------------------
+export const PRICE_SHEET_CSV = '';
+
+export function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const head = lines.shift().split(',').map((h) => h.trim().toLowerCase());
+  return lines.map((l) => {
+    const cells = l.split(',');
+    return Object.fromEntries(head.map((h, i) => [h, (cells[i] || '').trim()]));
+  });
+}
+
+// Extrae un número de textos como "8,3 HP" o "13 L"
+export function num(str) {
+  const m = String(str || '').replace(/\./g, '').match(/(\d+(?:,\d+)?)/);
+  return m ? parseFloat(m[1].replace(',', '.')) : 0;
+}

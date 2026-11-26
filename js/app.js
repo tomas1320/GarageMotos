@@ -1,7 +1,35 @@
 // ============================================================
 //  GARAGE MOTOS — App principal
 // ============================================================
-import { BUSINESS, MOTOS, CATEGORIES, PLANS, FEATURED, cuota, fmt, findMoto } from './data.js';
+import { BUSINESS, MOTOS, CATEGORIES, PLANS, FEATURED, ACCESSORIES, PRICE_SHEET_CSV, parseCSV, num, cuota, fmt, findMoto } from './data.js';
+import { createEngine } from './sound.js';
+
+// ------------------------------------------------------------
+//  Precios desde Google Sheets (si está configurado en data.js)
+// ------------------------------------------------------------
+async function loadSheetPrices() {
+  if (!PRICE_SHEET_CSV) return;
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(PRICE_SHEET_CSV, { signal: ctrl.signal, cache: 'no-store' });
+    clearTimeout(to);
+    parseCSV(await res.text()).forEach((row) => {
+      const m = findMoto(row.id);
+      if (!m) return;
+      const price = num(row.precio);
+      if (price > 0) m.price = price;
+      if (row.stock !== undefined && row.stock !== '') m.sold = Number(row.stock) === 0;
+    });
+  } catch (err) {
+    console.warn('No se pudieron leer los precios de la planilla; se usan los de data.js', err);
+  }
+}
+await loadSheetPrices();
+const accPrice = (ids) => ids.reduce((s, id) => s + (ACCESSORIES.find((a) => a.id === id)?.price || 0), 0);
+function accHTML(selected, name) {
+  return ACCESSORIES.map((a) => `<label class="acc__item"><input type="checkbox" name="${name}" value="${a.id}" ${selected.includes(a.id) ? 'checked' : ''}/><span><b>${a.name}</b><small>+${fmt(a.price)}${a.show3d ? ' · 3D' : ''}</small></span></label>`).join('');
+}
 
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => [...c.querySelectorAll(s)];
@@ -106,20 +134,32 @@ const hint = $('#introHint');
 const flash = $('#introFlash');
 const nav = $('#nav');
 let inIntro = true;
+const ride = { el: $('#rideBike'), beam: $('#introBeam'), lines: $('#introLines'), revved: false };
+let engine = null;
+let lastP = 0, throttle = 0;
+const soundBtn = $('#soundBtn');
+soundBtn.addEventListener('click', async () => {
+  if (!engine) engine = createEngine();
+  if (!engine) { toast('Tu navegador no soporta audio'); return; }
+  if (engine.on) engine.disable(); else await engine.enable();
+  soundBtn.setAttribute('aria-pressed', String(engine.on));
+  soundBtn.classList.toggle('is-on', engine.on);
+  $('span', soundBtn).textContent = engine.on ? 'Sonido activado' : 'Activar sonido';
+});
 
 function onIntroProgress(p) {
   // Letras GARAGE (0.28-0.5) y MOTOS (0.42-0.64)
   lettersG.forEach((s, i) => {
     const k = seg(p, 0.26 + i * 0.03, 0.36 + i * 0.03);
-    const out = seg(p, 0.86, 0.95);
+    const out = seg(p, 0.79, 0.86);
     s.style.transform = `translateY(${(1 - k) * 110 - out * 110}%)`;
   });
   lettersM.forEach((s, i) => {
     const k = seg(p, 0.42 + i * 0.03, 0.52 + i * 0.03);
-    const out = seg(p, 0.87, 0.96);
+    const out = seg(p, 0.8, 0.87);
     s.style.transform = `translateY(${(1 - k) * 110 + out * 110}%)`;
   });
-  const c = seg(p, 0.62, 0.72) * (1 - seg(p, 0.88, 0.95));
+  const c = seg(p, 0.62, 0.72) * (1 - seg(p, 0.79, 0.85));
   claim.style.opacity = c;
   claim.style.transform = `translateY(${(1 - c) * 20}px)`;
   // Tacómetro
@@ -132,7 +172,23 @@ function onIntroProgress(p) {
   const st = p < 0.2 ? 0 : p < 0.45 ? 1 : p < 0.82 ? 2 : 3;
   steps.forEach((s, i) => s.classList.toggle('on', i === st));
   hint.style.opacity = 1 - seg(p, 0.02, 0.1);
-  flash.style.opacity = seg(p, 0.93, 1);
+  flash.style.opacity = seg(p, 0.975, 1);
+  // Faro + moto que cruza la pantalla
+  const beam = seg(p, 0.83, 0.9) * (1 - seg(p, 0.96, 0.995));
+  ride.beam.style.opacity = beam;
+  ride.beam.style.transform = `translate(-50%, -50%) scale(${0.3 + beam * 0.9})`;
+  const rp = seg(p, 0.875, 0.98);
+  const e = rp < 0.5 ? 2 * rp * rp : 1 - Math.pow(-2 * rp + 2, 2) / 2;
+  ride.el.style.transform = `translate(${-90 + e * 240}vw, -50%) skewX(${-8 * Math.sin(rp * Math.PI)}deg)`;
+  ride.el.style.opacity = rp > 0 && rp < 1 ? 1 : 0;
+  ride.el.style.filter = `blur(${Math.sin(rp * Math.PI) * 2.5}px) drop-shadow(0 30px 30px rgba(0,0,0,.7))`;
+  ride.lines.style.opacity = Math.sin(rp * Math.PI);
+  if (rp > 0.05 && !ride.revved) { ride.revved = true; engine && engine.rev(); }
+  if (rp === 0) ride.revved = false;
+  // Motor
+  throttle += (clamp(Math.abs(p - lastP) * 90) - throttle) * 0.15;
+  lastP = p;
+  if (engine && engine.on) engine.set(900 + r * 11100, throttle, 1 - seg(p, 0.97, 1));
   const was = inIntro;
   inIntro = p < 0.985;
   if (was !== inIntro) nav.classList.toggle('in-intro', inIntro);
@@ -173,6 +229,7 @@ function onScroll() {
   const max = document.documentElement.scrollHeight - innerHeight;
   prog.style.transform = `scaleX(${clamp(y / max)})`;
   $('.wa-float').classList.toggle('is-hidden', y < introEnd - 50);
+  if (engine && engine.on && y > introEnd + 50) engine.set(900, 0, 0);
 }
 addEventListener('scroll', onScroll, { passive: true });
 onScroll();
@@ -348,7 +405,7 @@ function cardHTML(m) {
   return `
   <article class="card" data-id="${m.id}">
     <div class="card__stage" data-open="${m.id}" role="button" tabindex="0" aria-label="Ver ${m.brand} ${m.model}">
-      ${m.badge ? `<span class="card__badge ${/Mejor|Top|Más/.test(m.badge) ? 'card__badge--red' : ''}">${m.badge}</span>` : ''}
+      ${m.sold ? '<span class="card__badge">Vendida · consultá</span>' : m.badge ? `<span class="card__badge ${/Mejor|Top|Más/.test(m.badge) ? 'card__badge--red' : ''}">${m.badge}</span>` : ''}
       <button class="card__360" data-open="${m.id}" data-view="3d" aria-label="Ver ${m.model} en 360 grados">${ICON_360} 360°</button>
       <img src="${c.img}" alt="${m.brand} ${m.model} ${c.name}" loading="lazy" />
       <span class="card__sweep"></span>
@@ -359,7 +416,7 @@ function cardHTML(m) {
       ${dots}
       <div class="card__price">
         <div><b>${fmt(m.price)}</b><small>12 cuotas de ${fmt(cuota12)}</small></div>
-        <button class="card__go" data-reserve="${m.id}" aria-label="Reservar ${m.model}">${ICON_ARROW}</button>
+        ${m.sold ? `<a class="card__go" href="${waLink(`Hola! ¿Les va a entrar la ${m.brand} ${m.model}?`)}" target="_blank" rel="noopener" aria-label="Consultar ${m.model}">${ICON_ARROW}</a>` : `<button class="card__go" data-reserve="${m.id}" aria-label="Reservar ${m.model}">${ICON_ARROW}</button>`}
       </div>
     </div>
   </article>`;
@@ -452,7 +509,7 @@ if (finePointer && !reduceMotion) {
 // ------------------------------------------------------------
 const modal = $('#modal');
 const mView = $('.modal__view');
-let cur = { moto: null, ci: 0 };
+let cur = { moto: null, ci: 0, acc: [] };
 let viewer = null;
 let viewerLoading = null;
 let lastFocus = null;
@@ -475,7 +532,11 @@ function setModalColor(ci) {
 function openModal(id, ci = 0, view = 'photo') {
   const m = findMoto(id);
   if (!m) return;
-  cur = { moto: m, ci };
+  cur = { moto: m, ci, acc: [] };
+  $('#mAcc').innerHTML = accHTML(cur.acc, 'macc');
+  updateModalTotal();
+  $('#mReserve').disabled = !!m.sold;
+  $('#mReserve').textContent = m.sold ? 'Vendida — consultá' : 'Reservar con seña';
   lastFocus = document.activeElement;
   $('#mBrand').textContent = `${m.brand} · ${catLabel(m.cat)} · ${m.cc}cc`;
   $('#mTitle').textContent = m.model;
@@ -503,10 +564,21 @@ modal.addEventListener('click', (e) => {
   const sw = e.target.closest('#mColors .swatch');
   if (sw) setModalColor(+sw.dataset.ci);
 });
+function updateModalTotal() {
+  if (!cur.moto) return;
+  $('#mTotal').textContent = fmt(cur.moto.price + accPrice(cur.acc));
+}
+$('#mAcc').addEventListener('change', async (e) => {
+  cur.acc = $$('#mAcc input:checked').map((i) => i.value);
+  updateModalTotal();
+  const acc = ACCESSORIES.find((a) => a.id === e.target.value);
+  if (acc && acc.show3d && e.target.checked && $('#m3d').hidden) await setView('3d');
+  viewer && viewer.setAccessories(cur.acc);
+});
 $('#mReserve').addEventListener('click', () => {
-  const { moto, ci } = cur;
+  const { moto, ci, acc } = cur;
   closeModal();
-  selectForReserve(moto.id, ci);
+  selectForReserve(moto.id, ci, acc);
   setTimeout(() => scrollToEl('#reservar'), 60);
 });
 document.addEventListener('keydown', (e) => {
@@ -529,6 +601,7 @@ async function setView(v) {
   if (!viewer) return;
   viewer.resume();
   viewer.setBike(cur.moto, cur.moto.colors[cur.ci]);
+  viewer.setAccessories(cur.acc);
   viewer.goTo('tres4');
   markCam('tres4');
 }
@@ -575,7 +648,8 @@ $('#autoRot').addEventListener('click', (e) => {
 const STORE = 'gm_reservas_v1';
 const loadRes = () => { try { return JSON.parse(localStorage.getItem(STORE)) || []; } catch { return []; } };
 const saveRes = (l) => localStorage.setItem(STORE, JSON.stringify(l));
-const R = { moto: findMoto('motomel-skua-150'), ci: 0, branch: 0, pct: BUSINESS.reserve.minPct, step: 0 };
+const R = { moto: findMoto('motomel-skua-150'), ci: 0, branch: 0, pct: BUSINESS.reserve.minPct, step: 0, extras: [] };
+const rTotal = () => R.moto.price + accPrice(R.extras);
 
 const fMoto = $('#fMoto');
 fMoto.innerHTML = CATEGORIES.filter((c) => c.id !== 'all').map((c) =>
@@ -599,11 +673,12 @@ function updatePreview() {
   }
   $('#resBrand').textContent = m.brand;
   $('#resModel').textContent = m.model + ' · ' + c.name;
-  $('#resPrice').textContent = fmt(m.price);
+  $('#resPrice').textContent = fmt(rTotal()) + (R.extras.length ? ` · ${R.extras.length} accesorio${R.extras.length > 1 ? 's' : ''}` : '');
+  $('#fAcc').innerHTML = accHTML(R.extras, 'racc');
   updateSena();
 }
 function updateSena() {
-  const price = R.moto.price;
+  const price = rTotal();
   const sena = Math.round((price * R.pct) / 100 / 1000) * 1000;
   $('#senaPct').textContent = R.pct + '%';
   animateNumber($('#senaAmount'), sena);
@@ -614,8 +689,11 @@ function updateSena() {
   range.style.setProperty('--fill', ((R.pct - range.min) / (range.max - range.min)) * 100 + '%');
   return sena;
 }
-function selectForReserve(id, ci = 0) {
-  R.moto = findMoto(id) || R.moto;
+function selectForReserve(id, ci = 0, extras = []) {
+  const m = findMoto(id);
+  if (m && m.sold) { toast(`La ${m.model} está vendida. Consultanos por WhatsApp.`); return; }
+  R.moto = m || R.moto;
+  R.extras = [...extras];
   R.ci = Math.min(ci, R.moto.colors.length - 1);
   fMoto.value = R.moto.id;
   renderColorsR();
@@ -632,6 +710,7 @@ $('#fColors').addEventListener('click', (e) => {
   updatePreview();
 });
 $('#fBranch').addEventListener('change', (e) => (R.branch = +e.target.value));
+$('#fAcc').addEventListener('change', () => { R.extras = $$('#fAcc input:checked').map((i) => i.value); $('#resPrice').textContent = fmt(rTotal()); updateSena(); });
 $('#fPct').addEventListener('input', (e) => { R.pct = +e.target.value; updateSena(); });
 fMoto.value = R.moto.id;
 renderColorsR();
@@ -681,11 +760,13 @@ $('#wizard').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!$('#fTerms').checked) { toast('Aceptá las condiciones de la reserva'); $('#fTerms').focus(); return; }
   const m = R.moto, c = m.colors[R.ci], b = BUSINESS.branches[R.branch];
-  const sena = Math.round((m.price * R.pct) / 100 / 1000) * 1000;
+  const total = rTotal();
+  const sena = Math.round((total * R.pct) / 100 / 1000) * 1000;
+  const extras = R.extras.map((id) => ACCESSORIES.find((a) => a.id === id).name);
   const res = {
     code: 'GM-' + Math.random().toString(36).slice(2, 7).toUpperCase(),
     motoId: m.id, moto: `${m.brand} ${m.model}`, color: c.name, img: c.img,
-    price: m.price, pct: R.pct, sena, rest: m.price - sena,
+    price: total, extras, pct: R.pct, sena, rest: total - sena,
     pay: $('input[name="pay"]:checked').value,
     branch: `${b.name} — ${b.address}, ${b.city}`,
     name: $('#fName').value.trim(), dni: $('#fDni').value.trim(), phone: $('#fPhone').value.trim(), email: $('#fEmail').value.trim(),
@@ -707,7 +788,8 @@ function resMessage(r) {
     `Hola Garage Motos! Quiero confirmar mi reserva *${r.code}*`,
     ``,
     `🏍️ Moto: ${r.moto} (${r.color})`,
-    `💲 Precio contado: ${fmt(r.price)}`,
+    r.extras && r.extras.length ? `🧰 Accesorios: ${r.extras.join(', ')}` : '',
+    `💲 Total contado: ${fmt(r.price)}`,
     `✅ Seña (${r.pct}%): ${fmt(r.sena)}`,
     `💳 Medio de pago: ${r.pay}`,
     `📍 Retiro: ${r.branch}`,
@@ -734,7 +816,7 @@ function renderTicket(r) {
       <span class="ticket__ok">● Reserva generada · pendiente de seña</span>
       <div class="ticket__model">${r.moto}</div>
       <div class="ticket__rows">
-        <div><small>Color</small>${r.color}</div>
+        <div><small>Color</small>${r.color}${r.extras && r.extras.length ? ' + ' + r.extras.length + ' acc.' : ''}</div>
         <div><small>Precio contado</small>${fmt(r.price)}</div>
         <div><small>Seña (${r.pct}%)</small><b>${fmt(r.sena)}</b></div>
         <div><small>Saldo al retirar</small>${fmt(r.rest)}</div>
@@ -756,6 +838,7 @@ function escapeHTML(s) { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<
 
 $('#newRes').addEventListener('click', () => {
   $('#wizard').reset();
+  R.extras = [];
   R.pct = BUSINESS.reserve.minPct;
   fMoto.value = R.moto.id;
   R.branch = 0;
@@ -919,4 +1002,130 @@ if (hasGSAP) {
   gsap.from('.featured__head', { y: 40, opacity: 0, duration: 1, scrollTrigger: { trigger: '.featured', start: 'top 80%' } });
   gsap.fromTo('.cta__marquee', { xPercent: 8 }, { xPercent: -8, ease: 'none', scrollTrigger: { trigger: '.cta', start: 'top bottom', end: 'bottom top', scrub: true } });
   addEventListener('load', () => window.ScrollTrigger.refresh());
+}
+
+
+// ------------------------------------------------------------
+//  Cursor tuerca
+// ------------------------------------------------------------
+if (finePointer && !reduceMotion) {
+  const cur = document.createElement('div');
+  cur.className = 'nut-cursor';
+  cur.innerHTML = `<svg viewBox="0 0 40 40"><polygon points="20,2 35.6,11 35.6,29 20,38 4.4,29 4.4,11" /><circle cx="20" cy="20" r="7" /></svg>`;
+  document.body.appendChild(cur);
+  const dot = document.createElement('div');
+  dot.className = 'nut-dot';
+  document.body.appendChild(dot);
+  let mx = -100, my = -100, cx = -100, cy = -100, rot = 0;
+  addEventListener('pointermove', (e) => {
+    rot += Math.hypot(e.clientX - mx, e.clientY - my) * 0.6;
+    mx = e.clientX; my = e.clientY;
+    dot.style.transform = `translate(${mx}px, ${my}px)`;
+  });
+  document.addEventListener('pointerover', (e) => {
+    cur.classList.toggle('is-hover', !!e.target.closest('a, button, select, input, label, [data-open], .card__stage'));
+  });
+  document.addEventListener('pointerdown', () => cur.classList.add('is-down'));
+  document.addEventListener('pointerup', () => cur.classList.remove('is-down'));
+  document.addEventListener('pointerleave', () => { cur.style.opacity = 0; dot.style.opacity = 0; });
+  document.addEventListener('pointerenter', () => { cur.style.opacity = ''; dot.style.opacity = ''; });
+  (function tick() {
+    cx += (mx - cx) * 0.18;
+    cy += (my - cy) * 0.18;
+    cur.style.transform = `translate(${cx}px, ${cy}px) rotate(${rot}deg)`;
+    requestAnimationFrame(tick);
+  })();
+}
+
+// ------------------------------------------------------------
+//  Efecto faro (la luz sigue al cursor)
+// ------------------------------------------------------------
+{
+  const stage = $('#nightStage');
+  if (!finePointer) $('.night__sub').textContent = 'La luz recorre la moto sola';
+  let tx = 0.7, ty = 0.5, x = 0.7, y = 0.5, auto = !finePointer, active = false, t0 = performance.now();
+  const set = () => {
+    stage.style.setProperty('--x', (x * 100).toFixed(2) + '%');
+    stage.style.setProperty('--y', (y * 100).toFixed(2) + '%');
+  };
+  stage.addEventListener('pointermove', (e) => {
+    const r = stage.getBoundingClientRect();
+    tx = (e.clientX - r.left) / r.width;
+    ty = (e.clientY - r.top) / r.height;
+    auto = false;
+    stage.classList.add('is-lit');
+  });
+  stage.addEventListener('pointerleave', () => { auto = true; });
+  new IntersectionObserver(([en]) => { active = en.isIntersecting; }).observe(stage);
+  (function loop(now) {
+    requestAnimationFrame(loop);
+    if (!active) return;
+    if (auto) {
+      const k = (now - t0) / 1000;
+      tx = 0.62 + Math.sin(k * 0.7) * 0.22;
+      ty = 0.55 + Math.sin(k * 1.1) * 0.15;
+    }
+    x += (tx - x) * 0.12;
+    y += (ty - y) * 0.12;
+    set();
+  })(t0);
+  set();
+}
+
+// ------------------------------------------------------------
+//  Comparador
+// ------------------------------------------------------------
+{
+  const A = $('#vsA'), B = $('#vsB');
+  A.innerHTML = fMoto.innerHTML;
+  B.innerHTML = fMoto.innerHTML;
+  A.value = 'bajaj-dominar-250';
+  B.value = 'cfmoto-250nk';
+  const metrics = [
+    { k: 'Cilindrada', get: (m) => m.cc, f: (v) => v + ' cc', best: 'max' },
+    { k: 'Potencia', get: (m) => num(m.specs.Potencia), f: (v) => String(v).replace('.', ',') + ' HP', best: 'max' },
+    { k: 'Tanque', get: (m) => num(m.specs.Tanque), f: (v) => String(v).replace('.', ',') + ' L', best: 'max' },
+    { k: 'Precio contado', get: (m) => m.price, f: fmt, best: 'min' },
+    { k: '12 cuotas de', get: (m) => cuota(m.price, 12, plan12.tna), f: fmt, best: 'min' },
+  ];
+  const rows = $('#vsRows');
+  rows.innerHTML = metrics.map((mt, i) => `
+    <div class="vs__row" data-i="${i}">
+      <div class="vs__val vs__val--a"><b></b><span class="vs__bar"><i></i></span></div>
+      <div class="vs__label">${mt.k}</div>
+      <div class="vs__val vs__val--b"><span class="vs__bar"><i></i></span><b></b></div>
+    </div>`).join('');
+  function swapImg(img, src, alt, dir) {
+    if (img.getAttribute('src') === src) return;
+    if (hasGSAP && img.getAttribute('src')) {
+      gsap.to(img, { x: -60 * dir, opacity: 0, duration: 0.3, onComplete: () => {
+        img.src = src; img.alt = alt;
+        gsap.fromTo(img, { x: 80 * dir, opacity: 0 }, { x: 0, opacity: 1, duration: 0.7, ease: 'power3.out' });
+      } });
+    } else { img.src = src; img.alt = alt; }
+  }
+  function render() {
+    const a = findMoto(A.value), b = findMoto(B.value);
+    swapImg($('#vsImgA'), a.colors[0].img, `${a.brand} ${a.model}`, 1);
+    swapImg($('#vsImgB'), b.colors[0].img, `${b.brand} ${b.model}`, -1);
+    metrics.forEach((mt, i) => {
+      const va = mt.get(a), vb = mt.get(b), mx = Math.max(va, vb) || 1;
+      const row = $(`.vs__row[data-i="${i}"]`, rows);
+      const [ea, eb] = $$('.vs__val', row);
+      $('b', ea).textContent = va ? mt.f(va) : '—';
+      $('b', eb).textContent = vb ? mt.f(vb) : '—';
+      $('i', ea).style.width = (va / mx) * 100 + '%';
+      $('i', eb).style.width = (vb / mx) * 100 + '%';
+      const winA = va !== vb && (mt.best === 'max' ? va > vb : va < vb);
+      const winB = va !== vb && !winA;
+      ea.classList.toggle('is-win', winA);
+      eb.classList.toggle('is-win', winB);
+    });
+  }
+  A.addEventListener('change', render);
+  B.addEventListener('change', render);
+  render();
+  new IntersectionObserver(([en], obs) => {
+    if (en.isIntersecting) { $('#vs').classList.add('is-in'); obs.disconnect(); }
+  }, { threshold: 0.25 }).observe($('#vs'));
 }

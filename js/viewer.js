@@ -306,12 +306,49 @@ export function buildBike(cat, color) {
       hg.position.set(H.x - 0.02, barY, z);
       bike.add(hg);
     });
-    if (color.name === 'Negro') {
-      const box = rbox(0.32, 0.26, 0.34, 0.05, dark);
-      box.position.set(-0.75, P.seatY + 0.2, 0);
-      bike.add(box);
-    }
   }
+
+  // ---------- Accesorios (ocultos hasta que se eligen) ----------
+  const accRed = new THREE.MeshStandardMaterial({ color: '#e3121b', metalness: 0.3, roughness: 0.4 });
+  const mkAcc = (name) => {
+    const g = new THREE.Group();
+    g.name = 'acc-' + name;
+    g.visible = false;
+    bike.add(g);
+    return g;
+  };
+  const baul = mkAcc('baul');
+  const box = rbox(0.36, 0.27, 0.38, 0.07, dark);
+  box.position.set(-0.74, P.seatY + 0.22, 0);
+  baul.add(box);
+  const stripe = rbox(0.37, 0.025, 0.39, 0.01, accRed);
+  stripe.position.set(-0.74, P.seatY + 0.25, 0);
+  baul.add(stripe);
+  const rack = rbox(0.3, 0.02, 0.22, 0.008, dark);
+  rack.position.set(-0.72, P.seatY + 0.07, 0);
+  baul.add(rack);
+
+  const cubre = mkAcc('cubre');
+  [-1, 1].forEach((sd) => {
+    const hg = rbox(0.17, 0.075, 0.028, 0.014, dark);
+    hg.position.set(H.x - 0.03, barY, sd * 0.43);
+    hg.rotation.y = sd * 0.25;
+    cubre.add(hg);
+    const tip = rbox(0.05, 0.075, 0.03, 0.012, accRed);
+    tip.position.set(H.x + 0.05, barY, sd * 0.41);
+    cubre.add(tip);
+  });
+
+  const defensas = mkAcc('defensas');
+  [-1, 1].forEach((sd) => {
+    defensas.add(tube([
+      V(H.x - 0.22, H.y - 0.22, sd * 0.12),
+      V(0.3, 0.62, sd * 0.23),
+      V(0.33, 0.36, sd * 0.27),
+      V(0.2, 0.2, sd * 0.24),
+      V(0.0, 0.2, sd * 0.14),
+    ], 0.016, chrome));
+  });
 
   bike.traverse((m) => {
     if (m.isMesh) { m.castShadow = true; m.receiveShadow = false; }
@@ -386,6 +423,14 @@ export function createViewer(container, hud) {
   }
 
   let bike = null;
+  let accSel = [];
+  function applyAcc() {
+    if (!bike) return;
+    ["baul", "cubre", "defensas"].forEach((n) => {
+      const g = bike.getObjectByName("acc-" + n);
+      if (g) g.visible = accSel.includes(n);
+    });
+  }
   function setBike(moto, color) {
     if (bike) {
       stage.remove(bike);
@@ -397,6 +442,7 @@ export function createViewer(container, hud) {
     stage.add(bike);
     // animación de entrada
     bike.userData.intro = 0;
+    applyAcc();
   }
 
   // Animación de cámara a presets
@@ -425,6 +471,8 @@ export function createViewer(container, hud) {
     if (!w || !h) return;
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
+    // en lienzos angostos/altos abrimos el ángulo para que entre la moto completa
+    camera.fov = camera.aspect < 1.1 ? Math.min(62, 35 * (1.1 / camera.aspect)) : 35;
     camera.updateProjectionMatrix();
   }
   const ro = new ResizeObserver(resize);
@@ -437,9 +485,10 @@ export function createViewer(container, hud) {
   function loop() {
     raf = requestAnimationFrame(loop);
     if (!running) return;
-    const dt = Math.min(clock.getDelta(), 0.05);
+    const raw = clock.getDelta();
+    const dt = Math.min(raw, 0.05);
     if (tween) {
-      tween.t = Math.min(1, tween.t + dt / 1.1);
+      tween.t = Math.min(1, tween.t + raw / 1.1);
       const e = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - Math.pow(-2 * tween.t + 2, 3) / 2;
       tmp.set(
         THREE.MathUtils.lerp(tween.from.radius, tween.to.radius, e),
@@ -469,6 +518,7 @@ export function createViewer(container, hud) {
 
   return {
     setBike,
+    setAccessories(ids) { accSel = ids || []; applyAcc(); },
     goTo,
     setAuto(v) { controls.autoRotate = v; },
     get auto() { return controls.autoRotate; },
