@@ -3,6 +3,7 @@
 // ============================================================
 import { BUSINESS, MOTOS, CATEGORIES, PLANS, FEATURED, ACCESSORIES, PRICE_SHEET_CSV, parseCSV, num, cuota, fmt, findMoto } from './data.js';
 import { createEngine } from './sound.js';
+import { createSpinner } from './spin.js';
 
 // ------------------------------------------------------------
 //  Precios desde Google Sheets (si está configurado en data.js)
@@ -406,7 +407,7 @@ function cardHTML(m) {
   <article class="card" data-id="${m.id}">
     <div class="card__stage" data-open="${m.id}" role="button" tabindex="0" aria-label="Ver ${m.brand} ${m.model}">
       ${m.sold ? '<span class="card__badge">Vendida · consultá</span>' : m.badge ? `<span class="card__badge ${/Mejor|Top|Más/.test(m.badge) ? 'card__badge--red' : ''}">${m.badge}</span>` : ''}
-      <button class="card__360" data-open="${m.id}" data-view="3d" aria-label="Ver ${m.model} en 360 grados">${ICON_360} 360°</button>
+      <button class="card__360" data-open="${m.id}" data-view="3d" aria-label="Ver ${m.model} en 360 grados">${ICON_360} ${m.colors.some((c) => c.spin) ? '360° real' : '360°'}</button>
       <img src="${c.img}" alt="${m.brand} ${m.model} ${c.name}" loading="lazy" />
       <span class="card__sweep"></span>
     </div>
@@ -527,6 +528,10 @@ function setModalColor(ci) {
   $('#mColorName').textContent = c.name;
   $$('#mColors .swatch').forEach((s, i) => s.classList.toggle('is-active', i === ci));
   if (viewer && !$('#m3d').hidden) viewer.setBike(m, c);
+  // pestaña "360° real" solo si este color tiene fotos
+  $('#tabSpin').hidden = !c.spin;
+  $('#tab3d').innerHTML = `<span class="dot-live"></span> ${c.spin ? '3D' : '3D 360°'}`;
+  if (!$('#mSpin').hidden) setView(c.spin ? 'spin' : 'photo');
 }
 
 function openModal(id, ci = 0, view = 'photo') {
@@ -549,7 +554,8 @@ function openModal(id, ci = 0, view = 'photo') {
   setModalColor(ci);
   modal.hidden = false;
   lockScroll(true);
-  setView(view);
+  // el botón "360°" abre las fotos reales si existen; si no, el 3D
+  setView(view === '3d' && m.colors[ci].spin ? 'spin' : view);
   setTimeout(() => $('.modal__close', modal).focus(), 50);
 }
 function closeModal() {
@@ -590,12 +596,43 @@ document.addEventListener('keydown', (e) => {
 
 $$('.vtab').forEach((t) => t.addEventListener('click', () => setView(t.dataset.view)));
 
+// ---------- 360° con fotos reales ----------
+const spinOf = () => cur.moto && cur.moto.colors[cur.ci].spin;
+let spinner = null;
+let spinLoaded = null;
+function ensureSpinner() {
+  if (spinner) return spinner;
+  spinner = createSpinner({
+    stage: $('#spinStage'), img: $('#spinImg'), range: $('#spinRange'),
+    loadBar: $('#spinLoadBar'), loadTxt: $('#spinLoadTxt'),
+    onFrame: (i, n) => ($('#spinDeg').textContent = Math.round((i / n) * 360) + '°'),
+  });
+  return spinner;
+}
+$('#spinAuto').addEventListener('click', (e) => {
+  const s = ensureSpinner();
+  s.setAuto(!s.auto);
+  e.currentTarget.classList.toggle('is-on', s.auto);
+  e.currentTarget.setAttribute('aria-pressed', String(s.auto));
+});
+
 async function setView(v) {
+  if (v === 'spin' && !spinOf()) v = 'photo';
   $$('.vtab').forEach((t) => t.classList.toggle('is-active', t.dataset.view === v));
   const is3d = v === '3d';
-  $('#mPhoto').hidden = is3d;
+  $('#mPhoto').hidden = v !== 'photo';
+  $('#mSpin').hidden = v !== 'spin';
   $('#m3d').hidden = !is3d;
   mView.classList.toggle('is-3d', is3d);
+  mView.classList.toggle('is-spin', v === 'spin');
+  if (v === 'spin') {
+    const spin = spinOf();
+    if (spinLoaded !== spin.dir) {
+      spinLoaded = spin.dir;
+      $('#spinImg').alt = `${cur.moto.brand} ${cur.moto.model} en 360°`;
+      ensureSpinner().load(spin);
+    }
+  }
   if (!is3d) { viewer && viewer.pause(); return; }
   await ensureViewer();
   if (!viewer) return;
